@@ -217,6 +217,16 @@ console.log(formatReport(report, { color: true }));
 
 `db.query(sql, params)` returns the rows array, with `.rowCount` and `.command` attached. Full types are in [`src/index.d.ts`](src/index.d.ts).
 
+## FAQ
+
+**Why not just use SERIALIZABLE everywhere?** Sometimes that's the right answer, and sqlloom will tell you so. But serializable means some of your transactions get aborted under contention, so you need a retry loop (`--retries` checks that it's enough). Most apps also run on the default read committed, where a single `FOR UPDATE` or a one-statement `UPDATE … WHERE` is the cheaper fix. sqlloom shows you all three options side by side for *your* code.
+
+**How is this different from Jepsen / Elle / isocheck?** Those test the *database*: they run random workloads and check whether it really provides the isolation it promises. sqlloom assumes Postgres works and tests *your transactions*. It enumerates their interleavings instead of sampling, and points at the exact one that breaks your invariant.
+
+**And from Postgres's isolation tester or Hermitage?** Postgres's [isolation tester](https://github.com/postgres/postgres/tree/master/src/test/isolation) can also run every permutation of fixed SQL steps, but it is an internal tool for Postgres's own regression tests, and its specs compare against expected output. [Hermitage](https://github.com/ept/hermitage) is a set of hand-written schedules that document anomalies. sqlloom runs your app logic between queries, works out the interleavings itself, needs no expected output, and plugs into your test runner.
+
+**Does it need a superuser?** No. It needs permission to create schemas. As a superuser it also shortens `deadlock_timeout` for its own sessions, which makes scenarios that deadlock run faster.
+
 ## Caveats
 
 - **Point it at a disposable database.** sqlloom creates and drops its own `sqlloom_*` schemas and never touches anything else. Your `setup` SQL is still yours, though, so a test database is the right place for it.
