@@ -38,11 +38,11 @@ function verdictText(lr, c) {
   let result;
   if (lr.verdict === 'unsafe') {
     const parts = [];
-    if (lr.invariantFailures) parts.push(`${lr.invariantFailures} break the invariant`);
-    if (lr.anomalies) parts.push(`${lr.anomalies} match no serial order`);
+    if (lr.invariantFailures) parts.push(`${lr.invariantFailures} of ${lr.schedules} break the invariant`);
+    if (lr.anomalies) parts.push(`${lr.anomalies} of ${lr.schedules} match no serial order`);
     result = `${c('red', '✗ UNSAFE')}  ${parts.join(', ')}`;
   } else if (lr.verdict === 'retry') {
-    result = `${c('green', '✓ safe')}    ${c('yellow', `${lr.aborts} abort a transaction (40001/40P01): retry them in your code`)}`;
+    result = `${c('green', '✓ safe')}    ${c('yellow', `${lr.aborts} of ${lr.schedules} abort a transaction (40001/40P01): retry it in your code`)}`;
   } else {
     result = `${c('green', '✓ safe')}`;
   }

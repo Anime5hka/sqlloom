@@ -36,7 +36,8 @@
   },
   "files": [
     "src",
-    "bin"
+    "bin",
+    "examples"
   ],
   "engines": {
     "node": ">=20"
@@ -44,5 +45,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Anime5hka/sqlloom.git"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^5.9.3"
   }
 }
