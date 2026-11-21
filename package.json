@@ -1,17 +1,26 @@
 {
   "name": "sqlloom",
-  "version": "1.0.0",
-  "description": "",
-  "main": "src/index.js",
-  "directories": {
-    "doc": "docs"
-  },
+  "version": "0.1.0",
+  "description": "Find race conditions in your SQL transactions: runs every interleaving on a real Postgres at every isolation level and shows the one that corrupts your data.",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "typecheck": "tsc -p .",
+    "examples": "for f in examples/*.mjs; do node bin/sqlloom.js $f; done"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "postgres",
+    "postgresql",
+    "transactions",
+    "isolation-level",
+    "race-condition",
+    "concurrency",
+    "testing",
+    "serializable",
+    "write-skew",
+    "lost-update"
+  ],
+  "author": "Anime5hka",
+  "license": "MIT",
   "type": "module",
   "dependencies": {
     "pg": "^8.23.1"
@@ -21,5 +30,19 @@
       "types": "./src/index.d.ts",
       "default": "./src/index.js"
     }
+  },
+  "bin": {
+    "sqlloom": "bin/sqlloom.js"
+  },
+  "files": [
+    "src",
+    "bin"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Anime5hka/sqlloom.git"
   }
 }

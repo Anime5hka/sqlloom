@@ -73,6 +73,7 @@ export function formatReport(report, { color = false } = {}) {
     out.push(`  ${lr.level.padEnd(18)}${scope.padEnd(16)}${result}${mark}`);
   }
 
+  const shown = new Map();
   for (const lr of report.levels) {
     if (!lr.worst) continue;
     const w = lr.worst;
@@ -80,6 +81,12 @@ export function formatReport(report, { color = false } = {}) {
     const why = w.problem.kind === 'invariant'
       ? `invariant failed: ${w.problem.message}`
       : 'the result matches no serial order of the transactions';
+    const key = JSON.stringify([w.trace, why]);
+    if (shown.has(key)) {
+      out.push(`${c('red', '✗')} ${c('bold', lr.level)}: ${why} — same interleaving as ${shown.get(key)}`);
+      continue;
+    }
+    shown.set(key, lr.level);
     out.push(`${c('red', '✗')} ${c('bold', lr.level)}: ${why}`);
     out.push(c('gray', `  Shortest interleaving (${plural(w.switches, 'context switch')}, replay "${w.replay}"):`));
     out.push('');

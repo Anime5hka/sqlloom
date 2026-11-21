@@ -63,8 +63,10 @@ function permutations(xs) {
 }
 
 function outcomeKey(o) {
+  // A transaction that rolled back left no trace; *why* it failed (an app-level check vs. a
+  // constraint violation) doesn't change the data, so only the fact that it failed is compared.
   if (o.kind === 'committed') return `committed:${JSON.stringify(o.value ?? null)}`;
-  return `${o.kind}:${o.error?.message}`;
+  return o.kind;
 }
 
 function switches(trace) {
@@ -176,7 +178,8 @@ export async function check(config) {
     const checkSerial = config.serializable !== false;
     for (const level of levels) {
       const lr = { level, schedules: 0, complete: false, invariantFailures: 0, anomalies: 0, aborts: 0, worst: null };
-      let prefix = [];
+      const replay = config.replay !== undefined && config.replay !== null;
+      let prefix = replay ? String(config.replay).split('.').filter(Boolean).map((i) => ({ i: Number(i) })) : [];
       while (lr.schedules < maxSchedules) {
         const decisions = [];
         const choose = (n) => {
@@ -204,6 +207,11 @@ export async function check(config) {
           if (!lr.worst || sw < lr.worst.switches) {
             lr.worst = { ...run, problem, switches: sw, replay: decisions.map((d) => d.i).join('.') };
           }
+        }
+        if (replay) {
+          lr.replayed = { ...run, problem, replay: decisions.map((d) => d.i).join('.') };
+          lr.complete = true;
+          break;
         }
         while (decisions.length && decisions[decisions.length - 1].i + 1 >= decisions[decisions.length - 1].n) decisions.pop();
         if (!decisions.length) { lr.complete = true; break; }
