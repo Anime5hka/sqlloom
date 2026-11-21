@@ -97,6 +97,43 @@ test('deadlocks are detected and reported as retryable aborts', async () => {
   assert.ok(rc.aborts > 0);
 });
 
+test('three writers on one row: identical results on every run (lock hand-over is deterministic)', async () => {
+  const scenario = {
+    url,
+    setup: 'CREATE TABLE c (id int PRIMARY KEY, n int); INSERT INTO c VALUES (1, 0);',
+    transactions: Object.fromEntries(['x', 'y', 'z'].map((name, i) => [name, async (db) => {
+      await db.query('UPDATE c SET n = n * 10 + $1 WHERE id = 1', [i + 1]);
+    }])),
+    levels: ['rc'],
+    invariant: async (db) => { throw new Error(String((await db.query('SELECT n FROM c'))[0].n)); },
+  };
+  const summary = (r) => {
+    const l = r.levels[0];
+    return JSON.stringify([l.schedules, l.complete, l.worst.replay, l.worst.trace]);
+  };
+  const first = summary(await check(scenario));
+  for (let i = 0; i < 3; i++) assert.equal(summary(await check(scenario)), first);
+});
+
+test('a caught constraint error counts as a failed transaction, not a retry', async () => {
+  const r = await check({
+    url,
+    setup: 'CREATE TABLE users (id int PRIMARY KEY, username text NOT NULL UNIQUE)',
+    transactions: Object.fromEntries([1, 2].map((id) => [`signup ${id}`, async (db) => {
+      try {
+        await db.query('INSERT INTO users VALUES ($1, $2)', [id, 'ada']);
+        return 'ok';
+      } catch (e) {
+        return 'taken';
+      }
+    }])),
+    levels: ['rc'],
+  });
+  const rc = r.levels[0];
+  assert.equal(rc.aborts, 0, formatReport(r));
+  assert.equal(rc.verdict, 'safe', formatReport(r));
+});
+
 test('three transactions', async () => {
   const r = await check({
     url,

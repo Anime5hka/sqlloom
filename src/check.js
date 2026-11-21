@@ -94,6 +94,18 @@ class Worker {
     w.ctl = ctl;
     w.db = wrapClient(ctl);
     w.conns = [];
+    try {
+      await w.connectAll(url);
+    } catch (e) {
+      await w.close();
+      throw e;
+    }
+    return w;
+  }
+
+  async connectAll(url) {
+    const { ctl, names } = this;
+    const w = this;
     await ctl.query(`CREATE SCHEMA ${w.schema}; SET search_path TO ${w.schema}; SET synchronous_commit = off`);
     for (let i = 0; i < names.length; i++) {
       const c = await connect(url, w.schema);
@@ -101,7 +113,6 @@ class Worker {
       await c.client.query("SET deadlock_timeout = '20ms'").catch(() => {});
       w.conns.push(c);
     }
-    return w;
   }
 
   async reset() {

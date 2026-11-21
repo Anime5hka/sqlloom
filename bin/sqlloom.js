@@ -56,8 +56,9 @@ try {
     console.log(formatReport(report, { color }));
   }
   const mine = report.levels.find((l) => l.level === level);
-  process.exit(mine && mine.verdict === 'unsafe' ? 1 : 0);
+  // exitCode, not exit(): exit() can cut off a large report written to a pipe.
+  process.exitCode = mine && mine.verdict === 'unsafe' ? 1 : 0;
 } catch (e) {
   console.error(`sqlloom: ${e.message.replace(/^sqlloom: /, '')}`);
-  process.exit(2);
+  process.exitCode = 2;
 }

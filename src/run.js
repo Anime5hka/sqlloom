@@ -27,6 +27,7 @@ export class TxRunner {
     this.outcome = null; // { kind: 'committed'|'failed'|'aborted', value?, error? }
     this.fnResult = undefined;
     this.fnError = undefined;
+    this.lastError = undefined;
     this.event = deferred();
     const db = {
       query: (sql, params = []) => {
@@ -140,11 +141,13 @@ export class Schedule {
       if (r.inflight.settled) return null;
       const s = await lockState(this.ctl, r.pid);
       if (r.inflight.settled) return null;
-      if (s.waiting && !keepWaiting) return s.blockers;
+      // Waiting with no blocker means the lock holder just finished and this query is about to
+      // continue (row locks are re-acquired after waking): keep polling so nothing can overtake it.
+      if (s.waiting && s.blockers?.length && !keepWaiting) return s.blockers;
       if (Date.now() - started > POLL_TIMEOUT_MS) {
         throw new Error(`sqlloom: "${r.name}" has been waiting for ${POLL_TIMEOUT_MS / 1000}s on: ${r.inflight.op.sql}`);
       }
-      if (s.waiting) await new Promise((res) => setTimeout(res, 2));
+      if (s.waiting) await new Promise((res) => setTimeout(res, 1));
     }
   }
 
@@ -173,7 +176,10 @@ export class Schedule {
   async deliver(r, step) {
     const { op, value, error } = r.inflight;
     r.inflight = null;
-    if (error) step.error = { code: error.code, message: error.message };
+    if (error) {
+      step.error = { code: error.code, message: error.message };
+      r.lastError = error;
+    }
     else step.result = summarize(value);
 
     if (op.kind === 'query') {
@@ -193,8 +199,8 @@ export class Schedule {
     if (op.kind === 'commit') {
       if (error) r.outcome = classifyError(error);
       else if (value.command === 'ROLLBACK') {
-        // COMMIT of a transaction that hit an error the user code swallowed.
-        r.outcome = { kind: 'aborted', error: { code: '25P02', message: 'transaction was already aborted when COMMIT ran' } };
+        // COMMIT of a transaction whose query error the user code caught: Postgres rolled it back.
+        r.outcome = classifyError(r.lastError ?? { code: '25P02', message: 'transaction was already aborted when COMMIT ran' });
       } else r.outcome = { kind: 'committed', value: r.fnResult };
     } else {
       r.outcome = classifyError(r.fnError);
