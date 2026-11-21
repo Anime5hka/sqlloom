@@ -151,6 +151,7 @@ All of these are in [`examples/`](examples). Run them all with `npm run examples
 | [withdraw](examples/withdraw.mjs): read balance, check, write it back | ✗ lost update | ✓ retry | ✓ retry |
 | [withdraw-for-update](examples/withdraw-for-update.mjs): the same with `SELECT … FOR UPDATE` | ✓ | ✓ retry | ✓ retry |
 | [on-call](examples/on-call.mjs): "at least one doctor on call" (write skew) | ✗ | ✗ | ✓ retry |
+| [booking](examples/booking.mjs): count bookings, check capacity, insert (phantom) | ✗ overbooked | ✗ overbooked | ✓ retry |
 | [signup](examples/signup.mjs): check-then-insert username, no `UNIQUE` | ✗ duplicate | ✗ duplicate | ✓ retry |
 | [withdraw-atomic.sql](examples/withdraw-atomic.sql): check and write in one `UPDATE … WHERE balance >= 80` | ✓ | ✓ retry | ✓ retry |
 | [counter.sql](examples/counter.sql): read into a temp row, write back | ✗ lost update | ✓ retry | ✓ retry |
@@ -166,6 +167,16 @@ All of these are in [`examples/`](examples). Run them all with `npm run examples
 5. **Two checks per schedule.** Your invariant runs, and the final state plus the return values are compared against every serial order.
 6. **Shortest story.** Of all the failing schedules, the report shows the one with the fewest context switches, plus a `replay` token that re-runs exactly that interleaving.
 7. **Fast enough to keep in CI.** Schedules run in parallel, each in its own schema with its own connections, and `synchronous_commit` is off for these throwaway sessions. Two-transaction scenarios take well under a second, and three transactions with 600+ interleavings take about 5 s.
+
+## Use it from AI coding agents
+
+[`skills/sqlloom/SKILL.md`](skills/sqlloom/SKILL.md) is an agent skill. It teaches Claude Code (and other agents that read `SKILL.md`) how to turn the transaction code in your repo into a scenario, choose a useful invariant, read the matrix and suggest the smallest fix:
+
+```sh
+mkdir -p ~/.claude/skills/sqlloom && curl -fsSL https://raw.githubusercontent.com/Anime5hka/sqlloom/main/skills/sqlloom/SKILL.md -o ~/.claude/skills/sqlloom/SKILL.md
+```
+
+Then ask: *"can two concurrent checkouts oversell the last item?"*
 
 ## CLI
 

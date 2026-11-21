@@ -37,7 +37,8 @@
   "files": [
     "src",
     "bin",
-    "examples"
+    "examples",
+    "skills"
   ],
   "engines": {
     "node": ">=20"
