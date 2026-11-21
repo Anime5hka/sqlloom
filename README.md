@@ -67,6 +67,31 @@ npx sqlloom on-call.mjs            # exit code 1 if your level (default: read co
 
 sqlloom wraps each function in `BEGIN … COMMIT` (or `ROLLBACK` if it throws) on its own connection. Every `db.query` and every `COMMIT` is a step, and sqlloom chooses which transaction takes the next step.
 
+### Or in plain SQL
+
+No app logic between the queries? Then a `.sql` file is enough:
+
+```sql
+-- setup
+CREATE TABLE accounts (id int PRIMARY KEY, balance int NOT NULL);
+INSERT INTO accounts VALUES (1, 100);
+
+-- transaction alice
+UPDATE accounts SET balance = balance - 80 WHERE id = 1 AND balance >= 80;
+
+-- transaction bob
+UPDATE accounts SET balance = balance - 50 WHERE id = 1 AND balance >= 50;
+
+-- invariant
+SELECT balance >= 0 FROM accounts;      -- every row of every invariant query must be true
+```
+
+```sh
+npx sqlloom withdraw-atomic.sql
+```
+
+Use one statement per line-ending `;`. Dollar-quoted function bodies are not supported, so put those in `-- setup` of a `.mjs` scenario.
+
 ### No invariant? It still finds the bug
 
 Every result is compared with the **serial executions** of the same transactions (alice then bob, bob then alice). If the final tables, or a value a transaction returned, can't be explained by *any* serial order, that's an anomaly. A lost update needs no invariant at all:
@@ -127,6 +152,8 @@ All of these are in [`examples/`](examples). Run them all with `npm run examples
 | [withdraw-for-update](examples/withdraw-for-update.mjs): the same with `SELECT … FOR UPDATE` | ✓ | ✓ retry | ✓ retry |
 | [on-call](examples/on-call.mjs): "at least one doctor on call" (write skew) | ✗ | ✗ | ✓ retry |
 | [signup](examples/signup.mjs): check-then-insert username, no `UNIQUE` | ✗ duplicate | ✗ duplicate | ✓ retry |
+| [withdraw-atomic.sql](examples/withdraw-atomic.sql): check and write in one `UPDATE … WHERE balance >= 80` | ✓ | ✓ retry | ✓ retry |
+| [counter.sql](examples/counter.sql): read into a temp row, write back | ✗ lost update | ✓ retry | ✓ retry |
 
 **✓ retry** means the level is safe, but Postgres will abort one of the transactions in some interleavings (`40001` serialization failure or `40P01` deadlock), so your code has to retry it. sqlloom counts how often that happens.
 
@@ -143,7 +170,7 @@ All of these are in [`examples/`](examples). Run them all with `npm run examples
 ## CLI
 
 ```
-sqlloom <scenario.mjs> [--url <url>] [--level rc|rr|serializable] [--levels rc,rr,serializable] [--max <n>] [--json]
+sqlloom <scenario.mjs | scenario.sql> [--url <url>] [--level rc|rr|serializable] [--levels rc,rr,serializable] [--max <n>] [--json]
 ```
 
 | | |
@@ -188,7 +215,7 @@ console.log(formatReport(report, { color: true }));
 
 ## Roadmap
 
-- [ ] Plain `.sql` scenario files for transactions without app logic
+- [x] Plain `.sql` scenario files for transactions without app logic
 - [ ] MySQL / MariaDB
 - [x] Retry loops as part of the scenario (`--retries`)
 - [ ] Partial-order reduction to skip interleavings that can't differ

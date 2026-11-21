@@ -5,7 +5,7 @@
   "scripts": {
     "test": "node --test --test-concurrency=1 test/*.test.js",
     "typecheck": "tsc -p .",
-    "examples": "for f in examples/*.mjs; do node bin/sqlloom.js $f; done"
+    "examples": "for f in examples/*.mjs examples/*.sql; do node bin/sqlloom.js $f; done"
   },
   "keywords": [
     "postgres",

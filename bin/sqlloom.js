@@ -4,10 +4,12 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { check, formatReport } from '../src/index.js';
 import { normalizeLevel } from '../src/check.js';
+import { parseSqlScenario } from '../src/sqlfile.js';
+import { readFileSync } from 'node:fs';
 
 const HELP = `sqlloom — run every interleaving of your SQL transactions on a real Postgres
 
-Usage: sqlloom <scenario.mjs> [options]
+Usage: sqlloom <scenario.mjs | scenario.sql> [options]
 
   --url <url>          Postgres URL (default: $SQLLOOM_URL or $DATABASE_URL)
   --level <level>      The isolation level your app runs at (default: read committed).
@@ -20,7 +22,8 @@ Usage: sqlloom <scenario.mjs> [options]
   --no-color
   -h, --help
 
-A scenario module default-exports { setup, transactions, invariant? }. See README.`;
+A .mjs scenario default-exports { setup, transactions, invariant? }.
+A .sql scenario has sections: -- setup, -- transaction <name>, -- invariant. See README.`;
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -42,8 +45,13 @@ if (values.help || positionals.length !== 1) {
 }
 
 try {
-  const mod = await import(pathToFileURL(resolve(positionals[0])).href);
-  const scenario = mod.default ?? mod;
+  const file = resolve(positionals[0]);
+  let scenario;
+  if (file.endsWith('.sql')) scenario = parseSqlScenario(readFileSync(file, 'utf8'));
+  else {
+    const mod = await import(pathToFileURL(file).href);
+    scenario = mod.default ?? mod;
+  }
   const level = normalizeLevel(values.level ?? scenario.level ?? 'read committed');
   const report = await check({
     ...scenario,

@@ -8,6 +8,7 @@ First release.
 - Transactions are plain async functions, so app logic between queries is part of the test.
 - Two checks per schedule: your invariant, and equivalence with some serial order of the transactions (catches lost updates with no invariant at all).
 - Lock waits detected through `pg_stat_activity` and shown in the timeline (`⏳ waits for alice`); deadlocks and serialization failures reported as "retry".
+- Plain `.sql` scenarios (`-- setup`, `-- transaction <name>`, `-- invariant`).
 - `retries`: re-run transactions Postgres aborted, to check your retry loop.
 - Shortest failing interleaving (fewest context switches) with a `replay` token.
 - Parallel exploration in separate schemas; `assertSafe()` for test suites; CLI `sqlloom <scenario.mjs>` with exit code 1 if your isolation level is unsafe; `--json`.

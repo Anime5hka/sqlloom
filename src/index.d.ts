@@ -104,3 +104,5 @@ export function formatTrace(trace: TraceStep[], options?: { color?: boolean }): 
 export class UnsafeError extends Error {
   report: Report;
 }
+/** Parse a plain-SQL scenario (sections: `-- setup`, `-- transaction <name>`, `-- invariant`). */
+export function parseSqlScenario(text: string): Scenario;
