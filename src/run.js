@@ -3,6 +3,7 @@
 import { isRetryable } from './errors.js';
 
 const POLL_TIMEOUT_MS = 10_000;
+const FAST_PATH_MS = 3;
 
 function deferred() {
   let resolve;
@@ -129,6 +130,12 @@ export class Schedule {
   // Polls until the in-flight query settles or (when !keepWaiting) is seen waiting on a lock.
   async waitOrBlock(r, keepWaiting) {
     const started = Date.now();
+    // Most queries answer in well under a millisecond; only ask Postgres about locks if this one doesn't.
+    if (!r.inflight.settled) {
+      let timer;
+      await Promise.race([r.inflight.promise, new Promise((res) => { timer = setTimeout(res, FAST_PATH_MS); })]);
+      clearTimeout(timer);
+    }
     for (;;) {
       if (r.inflight.settled) return null;
       const s = await lockState(this.ctl, r.pid);

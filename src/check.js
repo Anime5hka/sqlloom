@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { randomBytes } from 'node:crypto';
+import { availableParallelism } from 'node:os';
 import { Schedule, TxRunner } from './run.js';
 import { UnsafeError } from './errors.js';
 import { formatReport } from './format.js';
@@ -39,22 +40,15 @@ async function connect(url, schema) {
   const client = new pg.Client({ connectionString: url, application_name: 'sqlloom' });
   await client.connect();
   client.on('error', () => {});
-  await client.query(`SET search_path TO ${schema}`);
+  // Durability is irrelevant for a throwaway schema; skipping the WAL flush makes COMMIT much
+  // faster and does not change isolation semantics.
+  await client.query(`SET search_path TO ${schema}; SET synchronous_commit = off`);
   const pid = (await client.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
   return { client, pid };
 }
 
-async function defaultSnapshot(db, schema) {
-  const tables = await db.query(
-    "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND table_type = 'BASE TABLE' ORDER BY table_name",
-    [schema],
-  );
-  const out = {};
-  for (const { table_name: t } of tables) {
-    const rows = await db.query(`SELECT * FROM "${t.replace(/"/g, '""')}"`);
-    out[t] = rows.map((r) => JSON.stringify(r)).sort().map((s) => JSON.parse(s));
-  }
-  return out;
+function quoteIdent(s) {
+  return `"${s.replace(/"/g, '""')}"`;
 }
 
 function permutations(xs) {
@@ -80,6 +74,114 @@ function switches(trace) {
   return n;
 }
 
+function compareReplay(a, b) {
+  const x = a.split('.').map(Number);
+  const y = b.split('.').map(Number);
+  for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return x[i] - y[i];
+  return x.length - y.length;
+}
+
+/** One private schema plus one connection per transaction (and one for setup/checks). */
+class Worker {
+  static async open(url, config, names) {
+    const w = new Worker();
+    w.config = config;
+    w.names = names;
+    w.schema = `sqlloom_${randomBytes(4).toString('hex')}`;
+    const ctl = new pg.Client({ connectionString: url, application_name: 'sqlloom' });
+    await ctl.connect();
+    ctl.on('error', () => {});
+    w.ctl = ctl;
+    w.db = wrapClient(ctl);
+    w.conns = [];
+    await ctl.query(`CREATE SCHEMA ${w.schema}; SET search_path TO ${w.schema}; SET synchronous_commit = off`);
+    for (let i = 0; i < names.length; i++) {
+      const c = await connect(url, w.schema);
+      // Superusers can shorten deadlock detection (default 1s); harmless if not allowed.
+      await c.client.query("SET deadlock_timeout = '20ms'").catch(() => {});
+      w.conns.push(c);
+    }
+    return w;
+  }
+
+  async reset() {
+    const { setup } = this.config;
+    const drop = `DROP SCHEMA IF EXISTS ${this.schema} CASCADE; CREATE SCHEMA ${this.schema};`;
+    if (typeof setup === 'string') {
+      await this.ctl.query(`${drop}\n${setup}`);
+    } else {
+      await this.ctl.query(drop);
+      if (typeof setup === 'function') await setup(this.db);
+    }
+  }
+
+  async snapshot() {
+    if (this.config.snapshot) return this.config.snapshot(this.db);
+    if (!this.snapshotSql) {
+      const tables = await this.db.query(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND table_type = 'BASE TABLE' ORDER BY table_name",
+        [this.schema],
+      );
+      const parts = tables.map(({ table_name: t }) => {
+        const lit = `'${t.replace(/'/g, "''")}'`;
+        return `${lit}, (SELECT coalesce(json_agg(r ORDER BY r::text), '[]'::json) FROM ${quoteIdent(t)} r)`;
+      });
+      this.snapshotSql = parts.length ? `SELECT json_build_object(${parts.join(', ')}) AS s` : "SELECT '{}'::json AS s";
+    }
+    return (await this.ctl.query(this.snapshotSql)).rows[0].s;
+  }
+
+  async invariant() {
+    if (!this.config.invariant) return null;
+    try {
+      const ok = await this.config.invariant(this.db);
+      return ok === false ? 'invariant returned false' : null;
+    } catch (e) {
+      return e?.message ?? String(e);
+    }
+  }
+
+  runner(name) {
+    const i = this.names.indexOf(name);
+    return new TxRunner(name, this.config.transactions[name], this.conns[i].client, this.conns[i].pid);
+  }
+
+  async schedule(txNames, level, choose) {
+    const runners = txNames.map((n) => this.runner(n));
+    const sched = new Schedule({ ctl: this.ctl, runners, level, choose });
+    try {
+      await sched.run();
+    } finally {
+      // Leave no connection inside a transaction, whatever happened.
+      for (const r of runners) {
+        if (r.inflight) await r.inflight.promise;
+        if (r.state !== 'done') await r.client.query('ROLLBACK').catch(() => {});
+      }
+    }
+    return { trace: sched.trace, outcomes: Object.fromEntries(runners.map((r) => [r.name, r.outcome])) };
+  }
+
+  async run(level, choose) {
+    await this.reset();
+    const { trace, outcomes } = await this.schedule(this.names, level, choose);
+    return { trace, outcomes, state: await this.snapshot(), invariantError: await this.invariant() };
+  }
+
+  async serial(order) {
+    await this.reset();
+    const outcomes = {};
+    for (const n of order) {
+      Object.assign(outcomes, (await this.schedule([n], 'serializable', () => 0)).outcomes);
+    }
+    return { order, outcomes, state: JSON.stringify(await this.snapshot()) };
+  }
+
+  async close() {
+    await this.ctl.query(`DROP SCHEMA IF EXISTS ${this.schema} CASCADE`).catch(() => {});
+    await Promise.all([this.ctl, ...this.conns.map((c) => c.client)].map((c) => c.end().catch(() => {})));
+  }
+}
+
 /**
  * Run every interleaving of `config.transactions` at each isolation level.
  * Returns a report; never throws for unsafe results (see assertSafe).
@@ -88,143 +190,109 @@ export async function check(config) {
   const names = Object.keys(config.transactions ?? {});
   if (names.length < 2) throw new Error('sqlloom: give at least two transactions');
   const levels = (config.levels ?? LEVELS).map(normalizeLevel);
-  const maxSchedules = config.maxSchedules ?? 2000;
+  const maxSchedules = config.maxSchedules ?? 5000;
+  const replay = config.replay !== undefined && config.replay !== null
+    ? String(config.replay).split('.').filter(Boolean).map(Number)
+    : null;
+  const parallel = replay ? 1 : Math.max(1, config.parallel ?? Math.min(4, availableParallelism()));
   const url = dbUrl(config);
-  const schema = `sqlloom_${randomBytes(4).toString('hex')}`;
+  const checkSerial = config.serializable !== false;
 
-  const ctlConn = new pg.Client({ connectionString: url, application_name: 'sqlloom' });
-  await ctlConn.connect();
-  ctlConn.on('error', () => {});
-  const ctl = wrapClient(ctlConn);
-  const conns = [];
+  const workers = [];
   try {
-    await ctlConn.query(`CREATE SCHEMA ${schema}`);
-    await ctlConn.query(`SET search_path TO ${schema}`);
-    for (const name of names) {
-      const c = await connect(url, schema);
-      // Superusers can shorten deadlock detection (default 1s); harmless if not allowed.
-      await c.client.query("SET deadlock_timeout = '20ms'").catch(() => {});
-      conns.push(c);
-    }
+    for (let i = 0; i < parallel; i++) workers.push(await Worker.open(url, config, names));
 
-    const reset = async () => {
-      await ctlConn.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE; CREATE SCHEMA ${schema}`);
-      if (typeof config.setup === 'function') await config.setup(ctl);
-      else if (config.setup) await ctlConn.query(config.setup);
-    };
-    const snapshot = async () => (config.snapshot ? config.snapshot(ctl) : defaultSnapshot(ctl, schema));
-    const invariant = async () => {
-      if (!config.invariant) return null;
-      try {
-        const ok = await config.invariant(ctl);
-        return ok === false ? 'invariant returned false' : null;
-      } catch (e) {
-        return e?.message ?? String(e);
-      }
-    };
-
-    const runSchedule = async (txNames, level, choose) => {
-      await reset();
-      const runners = txNames.map((n) => {
-        const i = names.indexOf(n);
-        return new TxRunner(n, config.transactions[n], conns[i].client, conns[i].pid);
-      });
-      const sched = new Schedule({ ctl: ctlConn, runners, level, choose });
-      let trace;
-      try {
-        trace = await sched.run();
-      } finally {
-        // Leave no connection inside a transaction, whatever happened.
-        for (const r of runners) {
-          if (r.inflight) await r.inflight.promise;
-          await r.client.query('ROLLBACK').catch(() => {});
-        }
-      }
-      const outcomes = Object.fromEntries(runners.map((r) => [r.name, r.outcome]));
-      return { trace, outcomes, state: await snapshot(), invariantError: await invariant() };
-    };
-
-    // Serial executions, computed on demand per subset of transactions.
     const serialCache = new Map();
-    const serialRuns = async (subset) => {
+    const serialRuns = (w, subset) => {
       const key = subset.join('\u0000');
       if (!serialCache.has(key)) {
-        const runs = [];
-        for (const order of permutations(subset)) {
-          await reset();
-          const outcomes = {};
-          for (const n of order) {
-            const i = names.indexOf(n);
-            const r = new TxRunner(n, config.transactions[n], conns[i].client, conns[i].pid);
-            await new Schedule({ ctl: ctlConn, runners: [r], level: 'serializable', choose: () => 0 }).run();
-            outcomes[n] = r.outcome;
-          }
-          runs.push({ order, outcomes, state: JSON.stringify(await snapshot()) });
-        }
-        serialCache.set(key, runs);
+        serialCache.set(key, (async () => {
+          const runs = [];
+          for (const order of permutations(subset)) runs.push(await w.serial(order));
+          return runs;
+        })());
       }
       return serialCache.get(key);
     };
-    const findSerialMatch = async (run) => {
+    const findSerialMatch = async (w, run) => {
       const survivors = names.filter((n) => run.outcomes[n].kind !== 'aborted');
       const state = JSON.stringify(run.state);
-      const serial = await serialRuns(survivors);
+      const serial = await serialRuns(w, survivors);
       const match = serial.find((s) => s.state === state
         && survivors.every((n) => outcomeKey(s.outcomes[n]) === outcomeKey(run.outcomes[n])));
       return { match, serial };
     };
 
     const report = { transactions: names, level: config.level ? normalizeLevel(config.level) : null, levels: [] };
-    const checkSerial = config.serializable !== false;
     for (const level of levels) {
       const lr = { level, schedules: 0, complete: false, invariantFailures: 0, anomalies: 0, aborts: 0, worst: null };
-      const replay = config.replay !== undefined && config.replay !== null;
-      let prefix = replay ? String(config.replay).split('.').filter(Boolean).map((i) => ({ i: Number(i) })) : [];
-      while (lr.schedules < maxSchedules) {
-        const decisions = [];
-        const choose = (n) => {
-          const want = decisions.length < prefix.length ? prefix[decisions.length].i : 0;
-          const i = Math.min(want, n - 1);
-          decisions.push({ i, n });
-          return i;
-        };
-        const run = await runSchedule(names, level, choose);
-        lr.schedules++;
-        if (Object.values(run.outcomes).some((o) => o.kind === 'aborted')) lr.aborts++;
-        let problem = null;
-        if (run.invariantError) {
-          lr.invariantFailures++;
-          problem = { kind: 'invariant', message: run.invariantError };
-        } else if (checkSerial) {
-          const { match, serial } = await findSerialMatch(run);
-          if (!match) {
-            lr.anomalies++;
-            problem = { kind: 'anomaly', serial };
+      // Depth-first enumeration of the choice tree, shared between workers: every finished run
+      // queues the untried siblings of each choice it made beyond its own prefix.
+      const tasks = [replay ?? []];
+      let active = 0;
+      let waiting = [];
+      const wake = () => { const ws = waiting; waiting = []; ws.forEach((f) => f()); };
+
+      const work = async (w) => {
+        for (;;) {
+          if (lr.schedules >= maxSchedules) return;
+          if (!tasks.length) {
+            if (!active) return;
+            await new Promise((r) => waiting.push(r));
+            continue;
+          }
+          const prefix = tasks.pop();
+          lr.schedules++;
+          active++;
+          try {
+            const decisions = [];
+            const choose = (n) => {
+              const i = decisions.length < prefix.length ? Math.min(prefix[decisions.length], n - 1) : 0;
+              decisions.push({ i, n });
+              return i;
+            };
+            const run = await w.run(level, choose);
+            if (!replay) {
+              for (let d = decisions.length - 1; d >= prefix.length; d--) {
+                for (let j = decisions[d].n - 1; j > decisions[d].i; j--) {
+                  tasks.push([...decisions.slice(0, d).map((x) => x.i), j]);
+                }
+              }
+            }
+            if (Object.values(run.outcomes).some((o) => o.kind === 'aborted')) lr.aborts++;
+            let problem = null;
+            if (run.invariantError) {
+              lr.invariantFailures++;
+              problem = { kind: 'invariant', message: run.invariantError };
+            } else if (checkSerial) {
+              const { match, serial } = await findSerialMatch(w, run);
+              if (!match) {
+                lr.anomalies++;
+                problem = { kind: 'anomaly', serial };
+              }
+            }
+            const replayToken = decisions.map((d) => d.i).join('.');
+            if (replay) lr.replayed = { ...run, problem, replay: replayToken };
+            if (problem) {
+              const sw = switches(run.trace);
+              const better = !lr.worst || sw < lr.worst.switches
+                || (sw === lr.worst.switches && compareReplay(replayToken, lr.worst.replay) < 0);
+              if (better) lr.worst = { ...run, problem, switches: sw, replay: replayToken };
+            }
+          } finally {
+            active--;
+            wake();
           }
         }
-        if (problem) {
-          const sw = switches(run.trace);
-          if (!lr.worst || sw < lr.worst.switches) {
-            lr.worst = { ...run, problem, switches: sw, replay: decisions.map((d) => d.i).join('.') };
-          }
-        }
-        if (replay) {
-          lr.replayed = { ...run, problem, replay: decisions.map((d) => d.i).join('.') };
-          lr.complete = true;
-          break;
-        }
-        while (decisions.length && decisions[decisions.length - 1].i + 1 >= decisions[decisions.length - 1].n) decisions.pop();
-        if (!decisions.length) { lr.complete = true; break; }
-        decisions[decisions.length - 1].i++;
-        prefix = decisions;
-      }
+      };
+      await Promise.all(workers.map(work));
+      lr.complete = tasks.length === 0;
       lr.verdict = lr.invariantFailures || lr.anomalies ? 'unsafe' : lr.aborts ? 'retry' : 'safe';
       report.levels.push(lr);
     }
     return report;
   } finally {
-    await ctlConn.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => {});
-    await Promise.all([ctlConn.end(), ...conns.map((c) => c.client.end())].map((p) => p.catch(() => {})));
+    await Promise.all(workers.map((w) => w.close()));
   }
 }
 
