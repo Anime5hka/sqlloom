@@ -13,7 +13,9 @@ Usage: sqlloom <scenario.mjs> [options]
   --level <level>      The isolation level your app runs at (default: read committed).
                        Exit code is 1 if this level is unsafe.
   --levels <list>      Levels to test, comma-separated: rc,rr,serializable (default: all)
-  --max <n>            Max schedules per level (default: 2000)
+  --max <n>            Max schedules per level (default: 5000)
+  --retries <n>        Re-run a transaction Postgres aborted (40001/40P01) up to n times,
+                       like your app's retry loop (default: 0)
   --json               Print the report as JSON
   --no-color
   -h, --help
@@ -27,6 +29,7 @@ const { values, positionals } = parseArgs({
     level: { type: 'string' },
     levels: { type: 'string' },
     max: { type: 'string' },
+    retries: { type: 'string' },
     json: { type: 'boolean' },
     'no-color': { type: 'boolean' },
     help: { type: 'boolean', short: 'h' },
@@ -48,6 +51,7 @@ try {
     level,
     levels: values.levels ? values.levels.split(',') : scenario.levels,
     maxSchedules: values.max ? Number(values.max) : scenario.maxSchedules,
+    retries: values.retries ? Number(values.retries) : scenario.retries,
   });
   if (values.json) {
     console.log(JSON.stringify(report, null, 2));

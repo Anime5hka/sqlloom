@@ -134,6 +134,21 @@ test('a caught constraint error counts as a failed transaction, not a retry', as
   assert.equal(rc.verdict, 'safe', formatReport(r));
 });
 
+test('retries: an aborted transaction is re-run inside the schedule', async () => {
+  const r = await check({ url, ...onCall, levels: ['serializable', 'rr'], retries: 2 });
+  const ser = level(r, 'serializable');
+  assert.equal(ser.verdict, 'safe', formatReport(r));
+  assert.equal(ser.aborts, 0);
+  assert.ok(ser.retried > 0);
+  assert.equal(level(r, 'repeatable read').verdict, 'unsafe');
+  // The retried transaction sees the other one's commit and refuses: "the last one on call".
+  const replayed = await check({ url, ...onCall, levels: ['serializable'], retries: 1, replay: '0.1.0.1' });
+  const t = replayed.levels[0].replayed;
+  assert.ok(t.trace.some((st) => st.type === 'retry'), JSON.stringify(t.trace));
+  assert.ok(Object.values(t.outcomes).some((o) => o.kind === 'failed' && /last one/.test(o.error.message)));
+  assert.match(formatReport(r), /needed a retry/);
+});
+
 test('three transactions', async () => {
   const r = await check({
     url,

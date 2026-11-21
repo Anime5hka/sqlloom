@@ -159,7 +159,8 @@ class Worker {
 
   async schedule(txNames, level, choose) {
     const runners = txNames.map((n) => this.runner(n));
-    const sched = new Schedule({ ctl: this.ctl, runners, level, choose });
+    const retries = txNames.length > 1 ? this.config.retries ?? 0 : 0;
+    const sched = new Schedule({ ctl: this.ctl, runners, level, choose, retries });
     try {
       await sched.run();
     } finally {
@@ -234,9 +235,14 @@ export async function check(config) {
       return { match, serial };
     };
 
-    const report = { transactions: names, level: config.level ? normalizeLevel(config.level) : null, levels: [] };
+    const report = {
+      transactions: names,
+      level: config.level ? normalizeLevel(config.level) : null,
+      retries: config.retries ?? 0,
+      levels: [],
+    };
     for (const level of levels) {
-      const lr = { level, schedules: 0, complete: false, invariantFailures: 0, anomalies: 0, aborts: 0, worst: null };
+      const lr = { level, schedules: 0, complete: false, invariantFailures: 0, anomalies: 0, aborts: 0, retried: 0, worst: null };
       // Depth-first enumeration of the choice tree, shared between workers: every finished run
       // queues the untried siblings of each choice it made beyond its own prefix.
       const tasks = [replay ?? []];
@@ -271,6 +277,7 @@ export async function check(config) {
               }
             }
             if (Object.values(run.outcomes).some((o) => o.kind === 'aborted')) lr.aborts++;
+            if (run.trace.some((st) => st.type === 'retry')) lr.retried++;
             let problem = null;
             if (run.invariantError) {
               lr.invariantFailures++;

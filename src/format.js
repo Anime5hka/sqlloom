@@ -6,6 +6,7 @@ function painter(color) {
 
 function plural(n, word) {
   if (n === 1) return `1 ${word}`;
+  if (/[^aeiou]y$/.test(word)) return `${n} ${word.slice(0, -1)}ies`;
   return `${n} ${/(s|sh|ch|x)$/.test(word) ? `${word}es` : `${word}s`}`;
 }
 
@@ -20,6 +21,7 @@ export function formatTrace(trace, { color = false } = {}) {
   return trace.map((s, i) => {
     const n = String(i + 1).padStart(2);
     const who = s.tx.padEnd(width);
+    if (s.type === 'retry') return `  ${c('gray', n)}  ${who} │ ${c('yellow', `↻ ${s.op}`)}`;
     let text = s.type === 'unblock' ? `↳ ${s.op}` : s.op;
     let tail = '';
     if (s.blockedBy && s.type === 'send') tail = c('yellow', `  ⏳ waits for ${s.blockedBy.join(', ')}`);
@@ -33,7 +35,7 @@ export function formatTrace(trace, { color = false } = {}) {
   }).join('\n');
 }
 
-function verdictText(lr, c) {
+function verdictText(lr, c, retries = 0) {
   const scope = lr.complete ? `${lr.schedules} (all)` : `${lr.schedules} (sampled)`;
   let result;
   if (lr.verdict === 'unsafe') {
@@ -42,9 +44,13 @@ function verdictText(lr, c) {
     if (lr.anomalies) parts.push(`${lr.anomalies} of ${lr.schedules} match no serial order`);
     result = `${c('red', '✗ UNSAFE')}  ${parts.join(', ')}`;
   } else if (lr.verdict === 'retry') {
-    result = `${c('green', '✓ safe')}    ${c('yellow', `${lr.aborts} of ${lr.schedules} abort a transaction (40001/40P01): retry it in your code`)}`;
+    const msg = retries
+      ? `${lr.aborts} of ${lr.schedules} still abort after ${plural(retries, 'retry')}`
+      : `${lr.aborts} of ${lr.schedules} abort a transaction (40001/40P01): retry it in your code`;
+    result = `${c('green', '✓ safe')}    ${c('yellow', msg)}`;
   } else {
     result = `${c('green', '✓ safe')}`;
+    if (lr.retried) result += `    ${c('gray', `${lr.retried} of ${lr.schedules} needed a retry`)}`;
   }
   return { scope, result };
 }
@@ -66,7 +72,7 @@ export function formatReport(report, { color = false } = {}) {
   const out = [];
   out.push(`${c('bold', 'sqlloom')} · ${plural(report.transactions.length, 'transaction')} (${report.transactions.join(', ')})`);
   out.push('');
-  const rows = report.levels.map((lr) => ({ lr, ...verdictText(lr, c) }));
+  const rows = report.levels.map((lr) => ({ lr, ...verdictText(lr, c, report.retries) }));
   out.push(c('gray', `  ${'isolation level'.padEnd(18)}${'schedules'.padEnd(16)}result`));
   for (const { lr, scope, result } of rows) {
     const mark = report.level === lr.level ? c('bold', ' ◂ yours') : '';

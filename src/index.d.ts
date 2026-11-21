@@ -35,12 +35,15 @@ export interface CheckOptions extends Scenario {
   serializable?: boolean;
   /** Worker schemas exploring in parallel (default: min(4, CPUs)). */
   parallel?: number;
+  /** Re-run a transaction that Postgres aborted (40001 / 40P01) up to this many times inside
+   *  the same schedule, like your app's retry loop (default 0). */
+  retries?: number;
   /** Run exactly one schedule, from a replay token in a report. */
   replay?: string;
 }
 
 export interface TraceStep {
-  type: 'send' | 'unblock';
+  type: 'send' | 'unblock' | 'retry';
   tx: string;
   op: string;
   result?: string;
@@ -77,6 +80,8 @@ export interface LevelReport {
   anomalies: number;
   /** Schedules in which Postgres aborted a transaction (serialization failure / deadlock). */
   aborts: number;
+  /** Schedules in which at least one transaction was retried (with `retries`). */
+  retried: number;
   verdict: 'unsafe' | 'retry' | 'safe';
   /** The failing schedule with the fewest context switches. */
   worst: (Run & { switches: number }) | null;
@@ -86,6 +91,7 @@ export interface LevelReport {
 export interface Report {
   transactions: string[];
   level: IsolationLevel | null;
+  retries: number;
   levels: LevelReport[];
 }
 

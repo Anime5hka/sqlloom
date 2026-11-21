@@ -102,6 +102,21 @@ test('transfers are safe at the isolation level we run in production', async () 
 });
 ```
 
+### Is your retry loop enough?
+
+At repeatable read and serializable, Postgres prevents some anomalies by aborting a transaction with `40001`, and your app is expected to retry it. `--retries 2` (or `{ retries: 2 }`) models that loop: an aborted transaction starts again inside the same schedule and sees whatever the others committed.
+
+```
+$ npx sqlloom examples/on-call.mjs --retries 2
+
+  isolation level   schedules       result
+  read committed    20 (all)        ✗ UNSAFE  18 of 20 break the invariant ◂ yours
+  repeatable read   20 (all)        ✗ UNSAFE  18 of 20 break the invariant
+  serializable      20 (all)        ✓ safe    18 of 20 needed a retry
+```
+
+With retries, serializable is fully safe: the retried doctor sees that the other one already left and refuses. Retries can't save repeatable read here, because nothing gets aborted.
+
 ## What it catches
 
 All of these are in [`examples/`](examples). Run them all with `npm run examples`.
@@ -137,6 +152,7 @@ sqlloom <scenario.mjs> [--url <url>] [--level rc|rr|serializable] [--levels rc,r
 | `--level` | The isolation level your app runs at (marked `◂ yours`). The exit code is `1` if it is unsafe |
 | `--levels` | Which levels to test (default: all three) |
 | `--max` | Max schedules per level (default 5000) |
+| `--retries` | Re-run transactions that Postgres aborted (`40001`/`40P01`) up to n times, like your app's retry loop |
 | `--json` | Machine-readable report |
 
 ## API
@@ -154,6 +170,7 @@ const report = await check({
   maxSchedules,            // default 5000 per level
   serializable,            // compare with serial executions (default true)
   snapshot,                // custom "final state" for that comparison (default: all tables)
+  retries,                 // re-run aborted (40001/40P01) transactions up to n times (default 0)
   parallel,                // worker schemas (default min(4, CPUs))
   replay,                  // run exactly one schedule from a report's replay token
 });
@@ -173,7 +190,7 @@ console.log(formatReport(report, { color: true }));
 
 - [ ] Plain `.sql` scenario files for transactions without app logic
 - [ ] MySQL / MariaDB
-- [ ] Retry loops as part of the scenario ("is my retry-on-40001 code correct?")
+- [x] Retry loops as part of the scenario (`--retries`)
 - [ ] Partial-order reduction to skip interleavings that can't differ
 - [ ] Python API
 

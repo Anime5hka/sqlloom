@@ -77,8 +77,9 @@ async function lockState(ctl, pid) {
 }
 
 export class Schedule {
-  constructor({ ctl, runners, level, choose }) {
+  constructor({ ctl, runners, level, choose, retries = 0 }) {
     this.ctl = ctl;
+    this.retries = retries;
     this.runners = runners;
     this.level = level;
     this.choose = choose;
@@ -88,6 +89,7 @@ export class Schedule {
 
   async run() {
     for (const r of this.runners) {
+      r.attempts = 0;
       await r.client.query(`BEGIN ISOLATION LEVEL ${this.level.toUpperCase()}`);
       r.start(this.level);
     }
@@ -204,6 +206,14 @@ export class Schedule {
       } else r.outcome = { kind: 'committed', value: r.fnResult };
     } else {
       r.outcome = classifyError(r.fnError);
+    }
+    if (r.outcome.kind === 'aborted' && r.attempts < this.retries) {
+      // Model the app's retry loop: start the transaction again, as a new BEGIN on the same connection.
+      r.attempts++;
+      this.trace.push({ type: 'retry', tx: r.name, op: `BEGIN (retry ${r.attempts} after ${r.outcome.error?.code})` });
+      await r.client.query(`BEGIN ISOLATION LEVEL ${this.level.toUpperCase()}`);
+      r.start(this.level);
+      await r.idle();
     }
   }
 }
