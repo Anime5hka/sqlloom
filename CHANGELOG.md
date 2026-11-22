@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 - Knex 3.3+: `knex({ client: 'pg', connectionPool: db.pg, version: '17' })` (tested).
 
