@@ -26,6 +26,7 @@ function dbUrl(config) {
 
 function wrapClient(client) {
   return {
+    pg: client,
     query: async (sql, params = []) => {
       const res = await client.query(sql, params);
       const rows = res.rows ?? [];
@@ -240,7 +241,18 @@ export async function check(config) {
       level: config.level ? normalizeLevel(config.level) : null,
       retries: config.retries ?? 0,
       levels: [],
+      warnings: [],
     };
+    // A transaction that fails even on its own usually means a broken scenario (a typo in the
+    // SQL, a missing table), and would make every level look "safe".
+    if (!replay) {
+      for (const n of names) {
+        const o = (await workers[0].serial([n])).outcomes[n];
+        if (o.kind !== 'committed') {
+          report.warnings.push(`${n} fails even when it runs alone: ${o.error?.message}${o.error?.code ? ` (${o.error.code})` : ''}`);
+        }
+      }
+    }
     for (const level of levels) {
       const lr = { level, schedules: 0, complete: false, invariantFailures: 0, anomalies: 0, aborts: 0, retried: 0, worst: null };
       // Depth-first enumeration of the choice tree, shared between workers: every finished run

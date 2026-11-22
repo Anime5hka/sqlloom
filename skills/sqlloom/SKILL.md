@@ -19,7 +19,7 @@ Never point `SQLLOOM_URL` at a production database. sqlloom only creates and dro
 
 ## Workflow
 
-1. **Extract the transaction.** Copy the real queries *and the app logic between them* into an async function `(db) => { ... }` that uses `await db.query(sql, params)`, which returns the rows array. Keep the same statements, `FOR UPDATE` clauses and conditions. If the app uses an ORM, write the SQL the ORM emits.
+1. **Extract the transaction.** Copy the real queries *and the app logic between them* into an async function `(db) => { ... }` that uses `await db.query(sql, params)`, which returns the rows array. Keep the same statements, `FOR UPDATE` clauses and conditions. If the app uses Drizzle, Kysely or anything else built on node-postgres, call the app's real function instead: pass it `drizzle(db.pg)` or `new Kysely({ dialect: new PostgresDialect({ pool: db.pg }) })`. The ORM's own `db.transaction(...)` is fine; sqlloom answers its BEGIN/COMMIT itself. For other ORMs, write the SQL the ORM emits.
 2. **Minimal setup.** Write only the tables and rows the transactions touch (`CREATE TABLE …; INSERT …`). Use the real constraints (`UNIQUE`, `CHECK`, foreign keys), because they change the answer.
 3. **Pick the racing pair.** Usually two copies of the same operation (two withdrawals, two bookings), or the operation plus the one that conflicts with it. Three at most.
 4. **Invariant (optional but sharp).** Throw if the business rule is broken: `balance >= 0`, `seats_taken <= capacity`, `count(*) per username = 1`. Write invariants that still hold when Postgres legitimately aborts one transaction.
@@ -76,4 +76,5 @@ Show the matrix and the shortest timeline verbatim. Then explain the timeline in
 
 - `now()`, `random()` or sequence-generated ids can make results differ from every serial run even when the logic is fine. Pass `snapshot: (db) => db.query('SELECT <business columns> …')` to compare only what matters.
 - An invariant like "n = 2" fails whenever Postgres aborts one transaction. Count what actually committed instead.
+- If the report starts with `⚠ <name> fails even when it runs alone`, the scenario is broken (typo, missing table, wrong column name). Fix that first; the matrix is meaningless until then.
 - Each `db.query` must be awaited before the next one in the same transaction.

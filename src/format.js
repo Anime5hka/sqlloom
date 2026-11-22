@@ -78,6 +78,7 @@ export function formatReport(report, { color = false } = {}) {
     const mark = report.level === lr.level ? c('bold', ' ◂ yours') : '';
     out.push(`  ${lr.level.padEnd(18)}${scope.padEnd(16)}${result}${mark}`);
   }
+  for (const w of report.warnings ?? []) out.push(`\n${c('yellow', '⚠')} ${w}`);
 
   const shown = new Map();
   for (const lr of report.levels) {

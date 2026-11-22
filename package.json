@@ -1,6 +1,6 @@
 {
   "name": "sqlloom",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Find race conditions in your SQL transactions: runs every interleaving on a real Postgres at every isolation level and shows the one that corrupts your data.",
   "scripts": {
     "test": "node --test --test-concurrency=1 test/*.test.js",
@@ -49,6 +49,8 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
+    "drizzle-orm": "^0.45.4",
+    "kysely": "^0.29.9",
     "typescript": "^5.9.3"
   }
 }

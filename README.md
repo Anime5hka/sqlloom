@@ -115,6 +115,41 @@ Every result is compared with the **serial executions** of the same transactions
 
 Both withdrawals succeeded, but only one of them shows up in the balance.
 
+### Your ORM code, unchanged
+
+Using Drizzle, Kysely or another library on top of node-postgres? Don't rewrite anything as SQL. `db.pg` looks like a `pg.Client` and a `pg.Pool`, so you can hand it to the ORM and call **the function your app already has**:
+
+```js
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { checkout } from '../src/orders.js';        // your real code, with its own db.transaction()
+
+export default {
+  setup: `...`,
+  transactions: {
+    alice: (db) => checkout(drizzle(db.pg), 'alice', 1, 1),
+    bob:   (db) => checkout(drizzle(db.pg), 'bob', 1, 1),
+  },
+  invariant: async (db) => { /* sold <= stock */ },
+};
+```
+
+```
+  isolation level   schedules       result
+  read committed    24 (all)        ✗ UNSAFE  22 of 24 break the invariant ◂ yours
+  repeatable read   24 (all)        ✓ safe    22 of 24 abort a transaction (40001/40P01): retry it in your code
+  serializable      24 (all)        ✓ safe    22 of 24 abort a transaction (40001/40P01): retry it in your code
+
+✗ read committed: invariant failed: sold 2 items, had 1 in stock
+   1  alice │ select "id", "stock" from "products" where "products"."id" = 1  → [[1,1]]
+   2  bob   │ select "id", "stock" from "products" where "products"."id" = 1  → [[1,1]]
+   3  bob   │ update "products" set "stock" = 0 where "products"."id" = 1  → UPDATE 1
+   ...
+```
+
+Adding `.for('update')` to the select makes it safe at read committed. Full example: [`examples/orm/drizzle-checkout.mjs`](examples/orm/drizzle-checkout.mjs). For Kysely, use `new Kysely({ dialect: new PostgresDialect({ pool: db.pg }) })`.
+
+The ORM's own `BEGIN`/`COMMIT`/`ROLLBACK` are answered by sqlloom, which already runs the function inside a transaction at the level under test. A level your code asks for (`{ isolationLevel: 'serializable' }`) is ignored the same way: sqlloom tests all three, and `--level` marks the one you run. Savepoints (nested transactions) go to Postgres as usual. Knex and Prisma haven't been tried yet.
+
 ### In your test suite
 
 ```js
@@ -215,7 +250,7 @@ const report = await check({
 console.log(formatReport(report, { color: true }));
 ```
 
-`db.query(sql, params)` returns the rows array, with `.rowCount` and `.command` attached. Full types are in [`src/index.d.ts`](src/index.d.ts).
+`db.query(sql, params)` returns the rows array, with `.rowCount` and `.command` attached. `db.pg` is the same connection shaped like a node-postgres client/pool, for ORMs. Full types are in [`src/index.d.ts`](src/index.d.ts).
 
 ## FAQ
 
@@ -237,6 +272,7 @@ console.log(formatReport(report, { color: true }));
 ## Roadmap
 
 - [x] Plain `.sql` scenario files for transactions without app logic
+- [x] ORM code as-is: Drizzle, Kysely and other node-postgres clients (`db.pg`)
 - [ ] MySQL / MariaDB
 - [x] Retry loops as part of the scenario (`--retries`)
 - [ ] Partial-order reduction to skip interleavings that can't differ

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0
+
+- **Your ORM code, unchanged.** `db.pg` is a node-postgres `Client`/`Pool` look-alike: `drizzle(db.pg)`, `new PostgresDialect({ pool: db.pg })`. BEGIN/COMMIT/ROLLBACK sent by the ORM's own `transaction()` are answered by sqlloom; savepoints go to Postgres. Tested with Drizzle and Kysely.
+- Errors wrapped by an ORM (`cause` chain) are still recognised as `40001`/`40P01` aborts.
+- Warning when a transaction fails even when it runs alone (a broken scenario used to look "safe").
+- Fix: a transaction that fired two queries at once could hang the scheduler.
+
 ## 0.1.0
 
 First release.

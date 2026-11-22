@@ -6,6 +6,13 @@ export type Rows<T = Record<string, any>> = T[] & { rowCount: number | null; com
 
 export interface Db {
   query<T = Record<string, any>>(sql: string, params?: unknown[]): Promise<Rows<T>>;
+  /**
+   * The same connection, shaped like a node-postgres `Client` / `Pool`: pass it to
+   * `drizzle(db.pg)` or `new PostgresDialect({ pool: db.pg })` to run your ORM code unchanged.
+   * Inside a transaction, BEGIN / COMMIT / ROLLBACK sent by the ORM are answered by sqlloom,
+   * which already runs the function in a transaction at the level under test.
+   */
+  pg: any;
 }
 
 /** One transaction: sqlloom wraps it in BEGIN … COMMIT (or ROLLBACK if it throws). */
@@ -93,6 +100,8 @@ export interface Report {
   level: IsolationLevel | null;
   retries: number;
   levels: LevelReport[];
+  /** Problems with the scenario itself, e.g. a transaction that fails even when it runs alone. */
+  warnings: string[];
 }
 
 export const LEVELS: IsolationLevel[];

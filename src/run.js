@@ -1,6 +1,6 @@
 // One schedule: runs every transaction on its own connection and lets `choose`
 // decide which transaction sends its next query.
-import { isRetryable } from './errors.js';
+import { dbError, isRetryable } from './errors.js';
 
 const POLL_TIMEOUT_MS = 10_000;
 const FAST_PATH_MS = 3;
@@ -29,20 +29,24 @@ export class TxRunner {
     this.fnError = undefined;
     this.lastError = undefined;
     this.event = deferred();
+    this.rollbackRequested = false;
+    this.finishAfterInflight = null;
+    const park = (sql, params, extra) => {
+      if (this.pending || this.inflight) {
+        return Promise.reject(new Error(`sqlloom: transaction "${this.name}" issued a query while another one was still running; await each query before sending the next`));
+      }
+      if (this.state === 'done') {
+        return Promise.reject(new Error(`sqlloom: transaction "${this.name}" already finished`));
+      }
+      return new Promise((resolve, reject) => {
+        this.pending = { kind: 'query', sql, params: params ?? [], resolve, reject, ...extra };
+        this.state = 'ready';
+        this.event.resolve();
+      });
+    };
     const db = {
-      query: (sql, params = []) => {
-        if (this.pending || this.inflight) {
-          return Promise.reject(new Error(`sqlloom: transaction "${this.name}" issued a query while another one was still running; await each query before sending the next`));
-        }
-        if (this.state === 'done') {
-          return Promise.reject(new Error(`sqlloom: transaction "${this.name}" already finished`));
-        }
-        return new Promise((resolve, reject) => {
-          this.pending = { kind: 'query', sql, params, resolve, reject };
-          this.state = 'ready';
-          this.event.resolve();
-        });
-      },
+      query: (sql, params = []) => park(sql, params),
+      pg: pgAdapter(this, park),
     };
     Promise.resolve()
       .then(() => this.fn(db))
@@ -53,7 +57,17 @@ export class TxRunner {
   }
 
   finishBody(failed) {
+    if (!failed && this.rollbackRequested) {
+      this.fnError = new Error('the transaction code sent ROLLBACK');
+      failed = true;
+    }
     const kind = failed ? 'rollback' : 'commit';
+    if (this.inflight) {
+      // The body gave up while one of its queries was still running (it fired two at once):
+      // finish once that query is back, so the scheduler never sees two operations at a time.
+      this.finishAfterInflight = kind;
+      return;
+    }
     this.pending = { kind, sql: kind.toUpperCase(), params: [] };
     this.state = 'ready';
     this.event.resolve();
@@ -114,7 +128,7 @@ export class Schedule {
     r.pending = null;
     r.state = 'running';
     const inflight = { op, settled: false };
-    inflight.promise = r.client.query({ text: op.sql, values: op.params }).then(
+    inflight.promise = r.client.query({ text: op.sql, values: op.params, rowMode: op.rowMode, types: op.types }).then(
       (res) => { inflight.settled = true; inflight.value = res; },
       (err) => { inflight.settled = true; inflight.error = err; },
     );
@@ -185,8 +199,16 @@ export class Schedule {
     else step.result = summarize(value);
 
     if (op.kind === 'query') {
+      if (r.finishAfterInflight) {
+        const kind = r.finishAfterInflight;
+        r.finishAfterInflight = null;
+        r.pending = { kind, sql: kind.toUpperCase(), params: [] };
+        r.state = 'ready';
+        return;
+      }
       r.state = 'running';
       if (error) op.reject(error);
+      else if (op.raw) op.resolve(value);
       else {
         const rows = value.rows;
         rows.rowCount = value.rowCount;
@@ -218,8 +240,57 @@ export class Schedule {
   }
 }
 
+// Transaction control the ORM sends itself (`db.transaction(...)`). sqlloom already wrapped the
+// function in BEGIN ... COMMIT at the level under test, so these are answered locally.
+// `ROLLBACK TO SAVEPOINT` and `COMMIT PREPARED` are real steps and go to Postgres.
+const TX_CONTROL = /^\s*(begin|start\s+transaction|commit|end|rollback|abort)\b([^;]*);?\s*$/i;
+
+function txControl(text) {
+  const m = TX_CONTROL.exec(text);
+  if (!m || /\b(to|prepared|chain)\b/i.test(m[2])) return null;
+  const word = m[1].toLowerCase();
+  if (word === 'commit' || word === 'end') return 'COMMIT';
+  if (word === 'rollback' || word === 'abort') return 'ROLLBACK';
+  return 'BEGIN';
+}
+
+// A pg.Client / pg.Pool look-alike whose queries are scheduled steps, so ORMs built on
+// node-postgres (Drizzle, Kysely, ...) run unchanged inside a scenario.
+function pgAdapter(runner, park) {
+  const client = {
+    processID: runner.pid,
+    query(config, values, callback) {
+      if (typeof values === 'function') { callback = values; values = undefined; }
+      const cfg = typeof config === 'string' ? { text: config } : config;
+      if (!cfg || typeof cfg.text !== 'string') {
+        return Promise.reject(new Error('sqlloom: db.pg.query supports query text or { text, values } objects (no cursors or streams)'));
+      }
+      const params = values ?? cfg.values ?? [];
+      let p;
+      const command = txControl(cfg.text);
+      if (command) {
+        if (command === 'ROLLBACK') runner.rollbackRequested = true;
+        p = Promise.resolve({ command, rowCount: null, rows: [], fields: [], oid: null });
+      } else {
+        p = park(cfg.text, params, { raw: true, rowMode: cfg.rowMode, types: cfg.types });
+      }
+      if (callback) { p.then((r) => callback(null, r), (e) => callback(e)); return undefined; }
+      return p;
+    },
+    // Pool-shaped API: every "connection" is this transaction's connection.
+    connect: async () => client,
+    release: () => {},
+    end: async () => {},
+    on: () => client,
+    off: () => client,
+    removeListener: () => client,
+  };
+  return client;
+}
+
 function classifyError(e) {
-  const error = { code: e?.code, message: e?.message ?? String(e) };
+  const root = dbError(e);
+  const error = root ? { code: root.code, message: root.message } : { message: e?.message ?? String(e) };
   return { kind: isRetryable(e) ? 'aborted' : 'failed', error };
 }
 
