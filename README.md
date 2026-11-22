@@ -19,6 +19,16 @@
 
 "Is `READ COMMITTED` enough here, or do I need `FOR UPDATE`? Or `SERIALIZABLE`?" Most of us answer that by reasoning about it, or by guessing, because the race only happens when two requests land in the same millisecond. sqlloom answers it the same way a model checker would. It takes your transaction code, including the `if` statements between the queries, and runs **every possible interleaving** of the queries against a real Postgres, once per isolation level. Then it tells you which levels are unsafe, which are safe if you retry, and the shortest interleaving that breaks.
 
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#write-a-scenario">Write a scenario</a> ·
+  <a href="#what-it-catches">What it catches</a> ·
+  <a href="#how-it-compares">How it compares</a> ·
+  <a href="#cli">CLI</a> ·
+  <a href="#api">API</a> ·
+  <a href="#faq">FAQ</a>
+</p>
+
 ## Quick start
 
 ```sh
@@ -203,6 +213,16 @@ All of these are in [`examples/`](examples). Run them all with `npm run examples
 
 **✓ retry** means the level is safe, but Postgres will abort one of the transactions in some interleavings (`40001` serialization failure or `40P01` deadlock), so your code has to retry it. sqlloom counts how often that happens.
 
+## How it compares
+
+| | Tests your app's transactions (with the logic between queries) | Every interleaving, not a sample | Every isolation level side by side | No expected output to write |
+|---|:-:|:-:|:-:|:-:|
+| Load tests / concurrent integration tests | ✅ | ❌ the race needs the same millisecond | ❌ | ✅ |
+| [Jepsen](https://jepsen.io/) / Elle | ❌ they test the database | ❌ random workloads | ✅ | ✅ |
+| Postgres [isolation tester](https://github.com/postgres/postgres/tree/master/src/test/isolation) | fixed SQL steps only | ✅ | one per spec | ❌ |
+| [Hermitage](https://github.com/ept/hermitage) | ❌ documentation of anomalies | hand-picked schedules | ✅ | – |
+| **sqlloom** | ✅ JS functions, Prisma, Drizzle, Kysely, Knex | ✅ | ✅ | ✅ invariant or serial-equivalence check |
+
 ## How it works
 
 1. **One connection per transaction.** Each schedule starts from a fresh schema built by your `setup`. Every transaction gets its own connection and its own `BEGIN ISOLATION LEVEL …`.
@@ -290,7 +310,7 @@ console.log(formatReport(report, { color: true }));
 
 ## See also
 
-[raceloom](https://github.com/Anime5hka/raceloom) does the same kind of search for async JavaScript and Python code, using fakes instead of a database.
+[raceloom](https://github.com/Anime5hka/raceloom) does the same kind of search for async JavaScript and Python code, using fakes instead of a database. [shakeout](https://github.com/Anime5hka/shakeout) finds flaky tests in a whole existing suite with seeded timing jitter.
 
 ## License
 
