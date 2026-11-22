@@ -312,6 +312,8 @@ console.log(formatReport(report, { color: true }));
 
 [raceloom](https://github.com/Anime5hka/raceloom) does the same kind of search for async JavaScript and Python code, using fakes instead of a database. [shakeout](https://github.com/Anime5hka/shakeout) finds flaky tests in a whole existing suite with seeded timing jitter.
 
+[rubberstamp](https://github.com/Anime5hka/rubberstamp) finds the functions your tests call but never check.
+
 ## License
 
 [MIT](LICENSE)
