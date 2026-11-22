@@ -2,3 +2,5 @@ node_modules/
 *.log
 .DS_Store
 coverage/
+examples/orm/prisma/generated/
+*.tgz

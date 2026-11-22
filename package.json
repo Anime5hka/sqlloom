@@ -1,11 +1,12 @@
 {
   "name": "sqlloom",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Find race conditions in your SQL transactions: runs every interleaving on a real Postgres at every isolation level and shows the one that corrupts your data.",
   "scripts": {
     "test": "node --test --test-concurrency=1 test/*.test.js",
     "typecheck": "tsc -p .",
-    "examples": "for f in examples/*.mjs examples/*.sql; do node bin/sqlloom.js $f; done"
+    "examples": "for f in examples/*.mjs examples/*.sql; do node bin/sqlloom.js $f; done",
+    "pretest": "prisma generate --schema examples/orm/prisma/schema.prisma >/dev/null"
   },
   "keywords": [
     "postgres",
@@ -48,9 +49,12 @@
     "url": "git+https://github.com/Anime5hka/sqlloom.git"
   },
   "devDependencies": {
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1",
     "@types/node": "^26.6.6",
     "drizzle-orm": "^0.45.4",
     "kysely": "^0.29.9",
+    "prisma": "^7.10.1",
     "typescript": "^5.9.3"
   }
 }

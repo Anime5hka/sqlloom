@@ -117,7 +117,7 @@ Both withdrawals succeeded, but only one of them shows up in the balance.
 
 ### Your ORM code, unchanged
 
-Using Drizzle, Kysely or another library on top of node-postgres? Don't rewrite anything as SQL. `db.pg` looks like a `pg.Client` and a `pg.Pool`, so you can hand it to the ORM and call **the function your app already has**:
+Using Prisma, Drizzle, Kysely or another library on top of node-postgres? Don't rewrite anything as SQL. `db.pg` looks like a `pg.Client` and a `pg.Pool`, so you can hand it to the ORM and call **the function your app already has**:
 
 ```js
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -146,9 +146,18 @@ export default {
    ...
 ```
 
-Adding `.for('update')` to the select makes it safe at read committed. Full example: [`examples/orm/drizzle-checkout.mjs`](examples/orm/drizzle-checkout.mjs). For Kysely, use `new Kysely({ dialect: new PostgresDialect({ pool: db.pg }) })`.
+Adding `.for('update')` to the select makes it safe at read committed. Full example: [`examples/orm/drizzle-checkout.mjs`](examples/orm/drizzle-checkout.mjs).
 
-The ORM's own `BEGIN`/`COMMIT`/`ROLLBACK` are answered by sqlloom, which already runs the function inside a transaction at the level under test. A level your code asks for (`{ isolationLevel: 'serializable' }`) is ignored the same way: sqlloom tests all three, and `--level` marks the one you run. Savepoints (nested transactions) go to Postgres as usual. Knex and Prisma haven't been tried yet.
+| ORM | Pass this to your code | Example |
+|---|---|---|
+| Drizzle | `drizzle(db.pg)` | [drizzle-checkout.mjs](examples/orm/drizzle-checkout.mjs) |
+| Prisma 7 | `new PrismaClient({ adapter: new PrismaPg(db.pg, { schema: db.schema }) })` | [prisma/checkout.ts](examples/orm/prisma/checkout.ts) |
+| Kysely | `new Kysely({ dialect: new PostgresDialect({ pool: db.pg }) })` | [test/orm.test.js](test/orm.test.js) |
+| raw `pg` | `db.pg.query(...)`, `db.pg.connect()` | |
+
+Prisma pins every table to a schema, so it needs `db.schema` (sqlloom's private schema for the run). Prisma's `P2034` write-conflict error counts as a retryable abort, like `40001`.
+
+The ORM's own `BEGIN`/`COMMIT`/`ROLLBACK` are answered by sqlloom, which already runs the function inside a transaction at the level under test. A level your code asks for (`{ isolationLevel: 'serializable' }`) is ignored the same way: sqlloom tests all three, and `--level` marks the one you run. Savepoints (nested transactions) go to Postgres as usual. Knex hasn't been tried yet.
 
 ### In your test suite
 
@@ -272,7 +281,7 @@ console.log(formatReport(report, { color: true }));
 ## Roadmap
 
 - [x] Plain `.sql` scenario files for transactions without app logic
-- [x] ORM code as-is: Drizzle, Kysely and other node-postgres clients (`db.pg`)
+- [x] ORM code as-is: Prisma 7, Drizzle, Kysely and other node-postgres clients (`db.pg`)
 - [ ] MySQL / MariaDB
 - [x] Retry loops as part of the scenario (`--retries`)
 - [ ] Partial-order reduction to skip interleavings that can't differ

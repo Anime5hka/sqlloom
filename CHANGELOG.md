@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- **Prisma 7**: `new PrismaPg(db.pg, { schema: db.schema })` runs your `$transaction` code. `db.pg` now passes `instanceof pg.Pool`; `db.schema` is the run's private schema; Prisma's `P2034` counts as a retryable abort.
+- `SET TRANSACTION ISOLATION LEVEL` sent by the app is ignored, so it can't replace the level under test.
+- The run's schema name is hidden in timelines.
+
 ## 0.2.0
 
 - **Your ORM code, unchanged.** `db.pg` is a node-postgres `Client`/`Pool` look-alike: `drizzle(db.pg)`, `new PostgresDialect({ pool: db.pg })`. BEGIN/COMMIT/ROLLBACK sent by the ORM's own `transaction()` are answered by sqlloom; savepoints go to Postgres. Tested with Drizzle and Kysely.

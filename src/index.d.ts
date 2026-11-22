@@ -13,6 +13,8 @@ export interface Db {
    * which already runs the function in a transaction at the level under test.
    */
   pg: any;
+  /** The private schema this run works in (on the search_path). For ORMs that pin a schema: `new PrismaPg(db.pg, { schema: db.schema })`. */
+  schema: string;
 }
 
 /** One transaction: sqlloom wraps it in BEGIN … COMMIT (or ROLLBACK if it throws). */

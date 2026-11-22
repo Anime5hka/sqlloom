@@ -24,9 +24,10 @@ function dbUrl(config) {
   return url;
 }
 
-function wrapClient(client) {
+function wrapClient(client, schema) {
   return {
     pg: client,
+    schema,
     query: async (sql, params = []) => {
       const res = await client.query(sql, params);
       const rows = res.rows ?? [];
@@ -93,7 +94,7 @@ class Worker {
     await ctl.connect();
     ctl.on('error', () => {});
     w.ctl = ctl;
-    w.db = wrapClient(ctl);
+    w.db = wrapClient(ctl, w.schema);
     w.conns = [];
     try {
       await w.connectAll(url);
@@ -155,7 +156,7 @@ class Worker {
 
   runner(name) {
     const i = this.names.indexOf(name);
-    return new TxRunner(name, this.config.transactions[name], this.conns[i].client, this.conns[i].pid);
+    return new TxRunner(name, this.config.transactions[name], this.conns[i].client, this.conns[i].pid, this.schema);
   }
 
   async schedule(txNames, level, choose) {

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { eq } from 'drizzle-orm';
-import { Kysely, PostgresDialect } from 'kysely';
+import { Kysely, PostgresDialect, sql } from 'kysely';
 import { check, formatReport } from '../src/index.js';
 import { url, level } from './helpers.js';
 import scenario, { products, orders } from '../examples/orm/drizzle-checkout.mjs';
@@ -57,6 +57,25 @@ test('Kysely: pool-shaped db.pg, retries see through to the pg error', async () 
   assert.ok(level(r, 'repeatable read').retried > 0);
   // ORM-issued BEGIN/COMMIT are answered locally, never shown as steps.
   assert.ok(level(r, 'read committed').worst.trace.every((s) => !/^(begin|commit)$/i.test(s.op) || s.op === 'COMMIT'));
+});
+
+test('a level requested by the app code does not override the level under test', async () => {
+  const withdraw = (amount, requested) => async (db) => {
+    const k = new Kysely({ dialect: new PostgresDialect({ pool: db.pg }) });
+    return k.transaction().setIsolationLevel(requested).execute(async (trx) => {
+      await sql`SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`.execute(trx); // Prisma's way
+      const { balance } = await trx.selectFrom('accounts').select('balance').where('id', '=', 1).executeTakeFirstOrThrow();
+      if (balance < amount) throw new Error('insufficient funds');
+      await trx.updateTable('accounts').set({ balance: balance - amount }).where('id', '=', 1).execute();
+    });
+  };
+  const r = await check({
+    url,
+    setup: 'CREATE TABLE accounts (id int PRIMARY KEY, balance int NOT NULL); INSERT INTO accounts VALUES (1, 100);',
+    transactions: { alice: withdraw(80, 'serializable'), bob: withdraw(50, 'serializable') },
+    levels: ['rc'],
+  });
+  assert.equal(level(r, 'read committed').verdict, 'unsafe');
 });
 
 test('ROLLBACK from the transaction code rolls back; savepoints go to Postgres', async () => {

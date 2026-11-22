@@ -1,0 +1,25 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "./generated"
+  moduleFormat = "esm"
+  importFileExtension = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Product {
+  id    Int @id
+  stock Int
+
+  @@map("products")
+}
+
+model Order {
+  id        Int    @id @default(autoincrement())
+  buyer     String
+  productId Int    @map("product_id")
+
+  @@map("orders")
+}

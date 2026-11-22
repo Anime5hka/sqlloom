@@ -1,5 +1,6 @@
 // One schedule: runs every transaction on its own connection and lets `choose`
 // decide which transaction sends its next query.
+import pg from 'pg';
 import { dbError, isRetryable } from './errors.js';
 
 const POLL_TIMEOUT_MS = 10_000;
@@ -12,11 +13,12 @@ function deferred() {
 }
 
 export class TxRunner {
-  constructor(name, fn, client, pid) {
+  constructor(name, fn, client, pid, schema) {
     this.name = name;
     this.fn = fn;
     this.client = client;
     this.pid = pid;
+    this.schema = schema;
   }
 
   start(level) {
@@ -47,6 +49,7 @@ export class TxRunner {
     const db = {
       query: (sql, params = []) => park(sql, params),
       pg: pgAdapter(this, park),
+      schema: this.schema,
     };
     Promise.resolve()
       .then(() => this.fn(db))
@@ -133,7 +136,7 @@ export class Schedule {
       (err) => { inflight.settled = true; inflight.error = err; },
     );
     r.inflight = inflight;
-    const step = { type: 'send', tx: r.name, op: describe(op) };
+    const step = { type: 'send', tx: r.name, op: this.describe(op) };
     this.trace.push(step);
     const blocked = await this.waitOrBlock(r, false);
     if (blocked) {
@@ -183,8 +186,15 @@ export class Schedule {
     }
   }
 
+  // ORMs that pin a schema (Prisma) qualify every name with sqlloom's random schema: hide it.
+  describe(op) {
+    const text = describe(op);
+    const schema = this.runners[0]?.schema;
+    return schema ? text.replaceAll(`"${schema}".`, '').replaceAll(`${schema}.`, '') : text;
+  }
+
   unblockStep(r) {
-    const step = { type: 'unblock', tx: r.name, op: describe(r.inflight.op) };
+    const step = { type: 'unblock', tx: r.name, op: this.describe(r.inflight.op) };
     this.trace.push(step);
     return step;
   }
@@ -245,7 +255,12 @@ export class Schedule {
 // `ROLLBACK TO SAVEPOINT` and `COMMIT PREPARED` are real steps and go to Postgres.
 const TX_CONTROL = /^\s*(begin|start\s+transaction|commit|end|rollback|abort)\b([^;]*);?\s*$/i;
 
+// Prisma sends the level as a separate statement right after BEGIN; letting it through would
+// silently replace the level under test.
+const SET_LEVEL = /^\s*set\s+transaction\s+isolation\s+level\s[^;]*;?\s*$/i;
+
 function txControl(text) {
+  if (SET_LEVEL.test(text)) return 'SET';
   const m = TX_CONTROL.exec(text);
   if (!m || /\b(to|prepared|chain)\b/i.test(m[2])) return null;
   const word = m[1].toLowerCase();
@@ -257,7 +272,9 @@ function txControl(text) {
 // A pg.Client / pg.Pool look-alike whose queries are scheduled steps, so ORMs built on
 // node-postgres (Drizzle, Kysely, ...) run unchanged inside a scenario.
 function pgAdapter(runner, park) {
-  const client = {
+  // Some adapters (Prisma's @prisma/adapter-pg) only take a pool if it is `instanceof pg.Pool`.
+  // That holds when the app and sqlloom share one copy of `pg`, which npm usually arranges.
+  const client = Object.assign(Object.create(pg.Pool.prototype), {
     processID: runner.pid,
     query(config, values, callback) {
       if (typeof values === 'function') { callback = values; values = undefined; }
@@ -284,13 +301,13 @@ function pgAdapter(runner, park) {
     on: () => client,
     off: () => client,
     removeListener: () => client,
-  };
+  });
   return client;
 }
 
 function classifyError(e) {
   const root = dbError(e);
-  const error = root ? { code: root.code, message: root.message } : { message: e?.message ?? String(e) };
+  const error = root ? { code: root.code, message: root.message } : { code: e?.code, message: e?.message ?? String(e) };
   return { kind: isRetryable(e) ? 'aborted' : 'failed', error };
 }
 
