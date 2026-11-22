@@ -116,3 +116,28 @@ test('a broken scenario is reported instead of looking safe', async () => {
   assert.match(r.warnings[0], /^a fails even when it runs alone: column "nope" does not exist \(42703\)/);
   assert.match(formatReport(r), /⚠ a fails even when it runs alone/);
 });
+
+test('Knex 3.3+: connectionPool: db.pg', async () => {
+  const { default: knex } = await import('knex');
+  const withdraw = (amount) => async (db) => {
+    // `version` skips Knex's `select version()` probe, which would otherwise be a scheduled step.
+    const k = knex({ client: 'pg', connectionPool: db.pg, version: '17' });
+    return k.transaction(async (trx) => {
+      const { balance } = await trx('accounts').where({ id: 1 }).first('balance');
+      if (balance < amount) throw new Error('insufficient funds');
+      await trx('accounts').where({ id: 1 }).update({ balance: balance - amount });
+      return balance - amount;
+    });
+  };
+  const r = await check({
+    url,
+    setup: 'CREATE TABLE accounts (id int PRIMARY KEY, balance int NOT NULL); INSERT INTO accounts VALUES (1, 100);',
+    transactions: { alice: withdraw(80), bob: withdraw(50) },
+    levels: ['rc', 'rr'],
+  });
+  assert.deepEqual(r.warnings, []);
+  const rc = level(r, 'read committed');
+  assert.equal(rc.verdict, 'unsafe', formatReport(r));
+  assert.equal(rc.worst.trace.filter((s) => s.type === 'send').length, 6, formatReport(r));
+  assert.equal(level(r, 'repeatable read').verdict, 'retry');
+});

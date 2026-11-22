@@ -53,6 +53,7 @@
     "@prisma/client": "^7.10.1",
     "@types/node": "^26.6.6",
     "drizzle-orm": "^0.45.4",
+    "knex": "^3.3.0",
     "kysely": "^0.29.9",
     "prisma": "^7.10.1",
     "typescript": "^5.9.3"

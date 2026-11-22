@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Knex 3.3+: `knex({ client: 'pg', connectionPool: db.pg, version: '17' })` (tested).
+
 ## 0.3.0
 
 - **Prisma 7**: `new PrismaPg(db.pg, { schema: db.schema })` runs your `$transaction` code. `db.pg` now passes `instanceof pg.Pool`; `db.schema` is the run's private schema; Prisma's `P2034` counts as a retryable abort.
