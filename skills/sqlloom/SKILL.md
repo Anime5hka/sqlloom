@@ -23,7 +23,7 @@ Never point `SQLLOOM_URL` at a production database. sqlloom only creates and dro
 2. **Minimal setup.** Write only the tables and rows the transactions touch (`CREATE TABLE …; INSERT …`). Use the real constraints (`UNIQUE`, `CHECK`, foreign keys), because they change the answer.
 3. **Pick the racing pair.** Usually two copies of the same operation (two withdrawals, two bookings), or the operation plus the one that conflicts with it. Three at most.
 4. **Invariant (optional but sharp).** Throw if the business rule is broken: `balance >= 0`, `seats_taken <= capacity`, `count(*) per username = 1`. Write invariants that still hold when Postgres legitimately aborts one transaction.
-5. **Run** `npx sqlloom scenario.mjs --level <the level the app uses>`. Add `--retries 2` if the app retries on 40001/40P01.
+5. **Run** `npx --no sqlloom scenario.mjs --level <the level the app uses>`. Add `--retries 2` if the app retries on 40001/40P01.
 6. **Read the matrix.** `✗ UNSAFE` means the bug is real at that level, and the timeline shows how. `✓ safe … abort` means it's safe only if the app retries. `✓ safe` means safe as written. `(all)` means every interleaving was run, so this is a proof for this scenario. `(sampled)` means the budget ran out.
 7. **Fix and re-run.** Typical fixes, from least to most invasive: make the check and the write one statement (`UPDATE … WHERE balance >= $1`), add a constraint, `SELECT … FOR UPDATE`, or raise the level to SERIALIZABLE and add a retry loop. Re-run until your level says safe, and keep the scenario as a test with `assertSafe`.
 
